@@ -1,10 +1,11 @@
 %bcond_without check
 
-#global rc_ver 1
+#global rc_ver 4
 %global lld_srcdir lld-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:rc%{rc_ver}}.src
-%global maj_ver 15
+%global cmake_srcdir cmake-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:rc%{rc_ver}}.src
+%global maj_ver 16
 %global min_ver 0
-%global patch_ver 7
+%global patch_ver 6
 
 # Don't include unittests in automatic generation of provides or requires.
 %global __provides_exclude_from ^%{_libdir}/lld/.*$
@@ -22,16 +23,19 @@ License:	NCSA
 URL:		http://llvm.org
 Source0:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{lld_srcdir}.tar.xz
 Source1:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{lld_srcdir}.tar.xz.sig
-Source2:	release-keys.asc
-Source3:	run-lit-tests
-Source4:	lit.lld-test.cfg.py
+Source2:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{cmake_srcdir}.tar.xz
+Source3:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{cmake_srcdir}.tar.xz.sig
+Source4:	release-keys.asc
+Source5:	run-lit-tests
+Source6:	lit.lld-test.cfg.py
 
 ExcludeArch:	s390x
 
-Patch0:		0001-PATCH-lld-CMake-Check-for-gtest-headers-even-if-lit..patch
-
 # Bundle libunwind header need during build for MachO support
 Patch1:		0002-PATCH-lld-Import-compact_unwind_encoding.h-from-libu.patch
+# Backport from LLVM 17.
+Patch2:		0001-lld-Use-installed-llvm_gtest-in-standalone-builds.patch
+
 
 BuildRequires:	gcc
 BuildRequires:	gcc-c++
@@ -91,7 +95,13 @@ LLVM regression tests.
 %endif
 
 %prep
-%{gpgverify} --keyring='%{SOURCE2}' --signature='%{SOURCE1}' --data='%{SOURCE0}'
+%{gpgverify} --keyring='%{SOURCE4}' --signature='%{SOURCE1}' --data='%{SOURCE0}'
+%{gpgverify} --keyring='%{SOURCE4}' --signature='%{SOURCE3}' --data='%{SOURCE2}'
+%setup -T -q -b 2 -n %{cmake_srcdir}
+# TODO: It would be more elegant to set -DLLVM_COMMON_CMAKE_UTILS=%{_builddir}/%{cmake_srcdir},
+# but this is not a CACHED variable, so we can't actually set it externally :(
+cd ..
+mv %{cmake_srcdir} cmake
 %autosetup -n %{lld_srcdir} -p2
 
 
@@ -229,6 +239,12 @@ cd %{_vpath_builddir}
 %endif
 
 %changelog
+* Fri Jun 30 2023 Tom Stellard <tstellar@redhat.com> - 16.0.6-1
+- 16.0.6 Release
+
+* Fri Apr 28 2023 Tom Stellard <tstellar@redhat.com> - 16.0.0-1
+- 16.0.0 Release
+
 * Thu Jan 19 2023 Tom Stellard <tstellar@redhat.com> - 15.0.7-1
 - Update to LLVM 15.0.7
 
