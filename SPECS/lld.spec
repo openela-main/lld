@@ -1,48 +1,85 @@
-%bcond_without check
+%bcond_with snapshot_build
 
-#global rc_ver 4
-%global lld_srcdir lld-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:rc%{rc_ver}}.src
-%global cmake_srcdir cmake-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:rc%{rc_ver}}.src
-%global maj_ver 16
+%if %{with snapshot_build}
+# Unlock LLVM Snapshot LUA functions
+%{llvm_sb_verbose}
+%{llvm_sb}
+%endif
+
+# Opt out of https://fedoraproject.org/wiki/Changes/fno-omit-frame-pointer
+# https://bugzilla.redhat.com/show_bug.cgi?id=2158587
+%undefine _include_frame_pointers
+
+%bcond_without check
+%bcond_with compat_build
+
+%global maj_ver 17
 %global min_ver 0
 %global patch_ver 6
+#global rc_ver 4
 
-# Don't include unittests in automatic generation of provides or requires.
-%global __provides_exclude_from ^%{_libdir}/lld/.*$
-%global __requires_exclude ^libgtest.*$
+%if %{with snapshot_build}
+%undefine rc_ver
+%global maj_ver %{llvm_snapshot_version_major}
+%global min_ver %{llvm_snapshot_version_minor}
+%global patch_ver %{llvm_snapshot_version_patch}
+%endif
+
+%global lld_version %{maj_ver}.%{min_ver}.%{patch_ver}
+
+%global lld_srcdir lld-%{lld_version}%{?rc_ver:rc%{rc_ver}}.src
+
+%if %{with compat_build}
+%global pkg_name lld%{maj_ver}
+%global install_prefix %{_libdir}/llvm%{maj_ver}
+%global install_includedir %{install_prefix}/include
+%global install_libdir %{install_prefix}/lib
+%global install_datadir %{install_prefix}/share
+%else
+%global pkg_name lld
+%global install_prefix /usr
+%global install_includedir %{_includedir}
+%global install_libdir %{_libdir}
+%global install_datadir %{_datadir}
+%endif
 
 %bcond_with ld_alternative
-%bcond_with testpkg
 
-Name:		lld
-Version:	%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:~rc%{rc_ver}}
-Release:	1%{?rc_ver:.rc%{rc_ver}}%{?dist}
+Name:		%{pkg_name}
+Version:	%{lld_version}%{?rc_ver:~rc%{rc_ver}}%{?llvm_snapshot_version_suffix:~%{llvm_snapshot_version_suffix}}
+Release:	1%{?dist}
 Summary:	The LLVM Linker
 
 License:	NCSA
 URL:		http://llvm.org
+%if %{with snapshot_build}
+Source0:	%{llvm_snapshot_source_prefix}lld-%{llvm_snapshot_yyyymmdd}.src.tar.xz
+%{llvm_snapshot_extra_source_tags}
+%else
 Source0:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{lld_srcdir}.tar.xz
 Source1:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{lld_srcdir}.tar.xz.sig
-Source2:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{cmake_srcdir}.tar.xz
-Source3:	https://github.com/llvm/llvm-project/releases/download/llvmorg-%{maj_ver}.%{min_ver}.%{patch_ver}%{?rc_ver:-rc%{rc_ver}}/%{cmake_srcdir}.tar.xz.sig
-Source4:	release-keys.asc
-Source5:	run-lit-tests
-Source6:	lit.lld-test.cfg.py
+Source2:	release-keys.asc
+%endif
 
 ExcludeArch:	s390x
 
 # Bundle libunwind header need during build for MachO support
 Patch1:		0002-PATCH-lld-Import-compact_unwind_encoding.h-from-libu.patch
-# Backport from LLVM 17.
-Patch2:		0001-lld-Use-installed-llvm_gtest-in-standalone-builds.patch
 
 
 BuildRequires:	gcc
 BuildRequires:	gcc-c++
 BuildRequires:	cmake
 BuildRequires:	ninja-build
+%if %{with compat_build}
+BuildRequires:	llvm%{maj_ver}-devel = %{version}
+BuildRequires:	llvm%{maj_ver}-cmake-utils = %{version}
+%else
 BuildRequires:	llvm-devel = %{version}
+BuildRequires:	llvm-cmake-utils = %{version}
 BuildRequires:	llvm-test = %{version}
+BuildRequires:	llvm-googletest = %{version}
+%endif
 BuildRequires:	ncurses-devel
 BuildRequires:	zlib-devel
 BuildRequires:	python3-devel
@@ -50,7 +87,6 @@ BuildRequires:	python3-devel
 # For make check:
 BuildRequires:	python3-rpm-macros
 BuildRequires:	python3-lit
-BuildRequires:	llvm-googletest = %{version}
 
 # For gpg source verification
 BuildRequires:	gnupg2
@@ -60,17 +96,19 @@ Requires(post): %{_sbindir}/alternatives
 Requires(preun): %{_sbindir}/alternatives
 %endif
 
-Requires: lld-libs = %{version}-%{release}
+Requires: %{name}-libs = %{version}-%{release}
 
 %description
 The LLVM project linker.
 
 %package devel
 Summary:	Libraries and header files for LLD
-Requires: lld-libs%{?_isa} = %{version}-%{release}
+Requires: %{name}-libs%{?_isa} = %{version}-%{release}
+%if %{without compat_build}
 # lld tools are referenced in the cmake files, so we need to add lld as a
 # dependency.
 Requires: %{name}%{?_isa} = %{version}-%{release}
+%endif
 
 %description devel
 This package contains library and header files needed to develop new native
@@ -82,107 +120,65 @@ Summary:	LLD shared libraries
 %description libs
 Shared libraries for LLD.
 
-%if %{with testpkg}
-%package test
-Summary: LLD regression tests
-Requires:	%{name}%{?_isa} = %{version}-%{release}
-Requires:	python3-lit
-Requires:	llvm-test(major) = %{maj_ver}
-Requires:	lld-libs = %{version}-%{release}
-
-%description test
-LLVM regression tests.
+%prep
+%if %{without snapshot_build}
+%{gpgverify} --keyring='%{SOURCE2}' --signature='%{SOURCE1}' --data='%{SOURCE0}'
 %endif
 
-%prep
-%{gpgverify} --keyring='%{SOURCE4}' --signature='%{SOURCE1}' --data='%{SOURCE0}'
-%{gpgverify} --keyring='%{SOURCE4}' --signature='%{SOURCE3}' --data='%{SOURCE2}'
-%setup -T -q -b 2 -n %{cmake_srcdir}
-# TODO: It would be more elegant to set -DLLVM_COMMON_CMAKE_UTILS=%{_builddir}/%{cmake_srcdir},
-# but this is not a CACHED variable, so we can't actually set it externally :(
-cd ..
-mv %{cmake_srcdir} cmake
 %autosetup -n %{lld_srcdir} -p2
 
+%if %{with compat_build}
+# For compat builds, we don't want to build the actual lld binary. While there is an
+# LLD_BUILD_TOOLS cmake option, it is incomplete in various ways (e.g. still leaves install
+# targets and symlinks), so instead skip the tools/lld build entirely.
+# We can't simply delete the binaries after the fact, because this would leave checks for
+# their existence in the cmake exports.
+sed 's/add_subdirectory(tools\/lld)//' -i CMakeLists.txt
+%endif
 
 %build
 
-# Disable lto since it causes the COFF/libpath.test lit test to crash.
-%global _lto_cflags %{nil}
+%undefine __cmake_in_source_build
 
-mkdir -p %{_vpath_builddir}
-cd %{_vpath_builddir}
-
-%cmake .. \
+%cmake \
 	-GNinja \
+	-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+	-DCMAKE_INSTALL_PREFIX=%{install_prefix} \
 	-DLLVM_LINK_LLVM_DYLIB:BOOL=ON \
 	-DLLVM_DYLIB_COMPONENTS="all" \
+	-DLLVM_COMMON_CMAKE_UTILS=%{install_datadir}/llvm/cmake \
 	-DCMAKE_SKIP_RPATH:BOOL=ON \
 	-DPYTHON_EXECUTABLE=%{__python3} \
+%if %{with compat_build}
+	-DLLVM_CMAKE_DIR=%{install_libdir}/cmake/llvm \
+	-DLLVM_INCLUDE_TESTS=OFF \
+%else
 	-DLLVM_INCLUDE_TESTS=ON \
-	-DLLVM_MAIN_SRC_DIR=%{_datadir}/llvm/src \
 	-DLLVM_EXTERNAL_LIT=%{_bindir}/lit \
 	-DLLVM_LIT_ARGS="-sv \
 	--path %{_libdir}/llvm" \
-%if 0%{?__isa_bits} == 64
-	-DLLVM_LIBDIR_SUFFIX=64
-%else
-	-DLLVM_LIBDIR_SUFFIX=
+%if %{with snapshot_build}
+	-DLLVM_VERSION_SUFFIX="%{llvm_snapshot_version_suffix}" \
 %endif
+%if 0%{?__isa_bits} == 64
+	-DLLVM_LIBDIR_SUFFIX=64 \
+%else
+	-DLLVM_LIBDIR_SUFFIX= \
+%endif
+%endif
+	-DLLVM_MAIN_SRC_DIR=%{_datadir}/llvm/src
 
 %cmake_build
 
-%if %{with testpkg}
-# Build the unittests so we can install them.
-%cmake_build --target lld-test-depends
-%endif
-
 %install
-%if %{with testpkg}
-%global lit_cfg test/%{_arch}.site.cfg.py
-%global lit_unit_cfg test/Unit/%{_arch}.site.cfg.py
-%global lit_lld_test_cfg_install_path %{_datadir}/lld/lit.lld-test.cfg.py
-
-# Generate lit config files.  Strip off the last line that initiates the
-# test run, so we can customize the configuration.
-head -n -1 %{__cmake_builddir}/test/lit.site.cfg.py >> %{lit_cfg}
-head -n -1 %{__cmake_builddir}/test/Unit/lit.site.cfg.py >> %{lit_unit_cfg}
-
-# Patch lit config files to load custom config:
-for f in %{lit_cfg} %{lit_unit_cfg}; do
-  echo "lit_config.load_config(config, '%{lit_lld_test_cfg_install_path}')" >> $f
-done
-
-# Install test files
-install -d %{buildroot}%{_datadir}/lld/src
-cp %{SOURCE4} %{buildroot}%{_datadir}/lld/
-
-# The various tar options are there to make sur the archive is the same on 32 and 64 bit arch, i.e.
-# the archive creation is reproducible. Move arch-specific content out of the tarball
-mv %{lit_cfg} %{buildroot}%{_datadir}/lld/src/%{_arch}.site.cfg.py
-mv %{lit_unit_cfg} %{buildroot}%{_datadir}/lld/src/%{_arch}.Unit.site.cfg.py
-tar --sort=name --mtime='UTC 2020-01-01' -c test/ | gzip -n > %{buildroot}%{_datadir}/lld/src/test.tar.gz
-
-install -d %{buildroot}%{_libexecdir}/tests/lld
-install -m 0755 %{SOURCE3} %{buildroot}%{_libexecdir}/tests/lld
-
-# Install unit test binaries
-install -d %{buildroot}%{_libdir}/lld/
-
-rm -rf `find %{buildroot}%{_libdir}/lld/ -iname '*make*'`
-
-# Install gtest libraries
-cp %{__cmake_builddir}/%{_lib}/libgtest*so* %{buildroot}%{_libdir}/lld/
-%endif
 
 # Install libraries and binaries
-pushd %{_vpath_builddir}
 %cmake_install
-popd
-
 
 # This is generated by Patch1 during build and (probably) must be removed afterward
-rm %{buildroot}%{_includedir}/mach-o/compact_unwind_encoding.h
+rm %{buildroot}%{install_includedir}/mach-o/compact_unwind_encoding.h
+
+install -D -m 644 -t  %{buildroot}%{_mandir}/man1/ docs/ld.lld.1
 
 %if %{with ld_alternative}
 # Required when using update-alternatives:
@@ -199,17 +195,16 @@ fi
 %endif
 
 %check
-cd %{_vpath_builddir}
 
-# armv7lhl tests disabled because of arm issue, see https://koji.fedoraproject.org/koji/taskinfo?taskID=33660162
-%ifnarch %{arm}
+%if %{without compat_build}
 %if %{with check}
 %cmake_build --target check-lld
 %endif
-%endif
 
 %ldconfig_scriptlets libs
+%endif
 
+%if %{without compat_build}
 %files
 %license LICENSE.TXT
 %if %{with ld_alternative}
@@ -219,26 +214,24 @@ cd %{_vpath_builddir}
 %{_bindir}/ld.lld
 %{_bindir}/ld64.lld
 %{_bindir}/wasm-ld
-
-%files devel
-%{_includedir}/lld
-%{_libdir}/liblld*.so
-%{_libdir}/cmake/lld/
-
-%files libs
-%{_libdir}/liblld*.so.*
-
-%if %{with testpkg}
-%files test
-%{_libexecdir}/tests/lld/
-%{_libdir}/lld/
-%{_datadir}/lld/src/test.tar.gz
-%{_datadir}/lld/src/%{_arch}.site.cfg.py
-%{_datadir}/lld/src/%{_arch}.Unit.site.cfg.py
-%{_datadir}/lld/lit.lld-test.cfg.py
+%{_mandir}/man1/ld.lld.1*
 %endif
 
+%files devel
+%{install_includedir}/lld
+%{install_libdir}/liblld*.so
+%{install_libdir}/cmake/lld/
+
+%files libs
+%{install_libdir}/liblld*.so.*
+
 %changelog
+* Wed Nov 29 2023 Nikita Popov <npopov@redhat.com> - 17.0.6-1
+- Update to LLVM 17.0.6
+
+* Wed Oct 04 2023 Nikita Popov <npopov@redhat.com> - 17.0.2-1
+- Update to LLVM 17.0.2
+
 * Fri Jun 30 2023 Tom Stellard <tstellar@redhat.com> - 16.0.6-1
 - 16.0.6 Release
 
